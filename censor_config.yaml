@@ -1,0 +1,36 @@
+# ============================================================
+# Video Censor 配置文件
+# 定义需要脱敏的敏感信息和处理参数
+# ============================================================
+
+# 正则匹配模式（自动检测符合模式的文字）
+patterns:
+  - name: 手机号
+    regex: "1[3-9]\\d{9}"
+  - name: 身份证号
+    regex: "\\d{6}(19|20)\\d{2}(0[1-9]|1[0-2])(0[1-9]|[12]\\d|3[01])\\d{3}[\\dXx]"
+  - name: 身份证号(简化)
+    regex: "\\d{17}[\\dXx]"
+  - name: 邮箱
+    regex: "[\\w.+-]+@[\\w-]+\\.[\\w.]+"
+  - name: 银行卡号
+    regex: "\\d{4}[\\s-]?\\d{4}[\\s-]?\\d{4}[\\s-]?\\d{4,7}"
+
+# 精确关键词匹配（直接指定要打码的文字）
+# 在此添加姓名、公司名等需要脱敏的文字
+keywords:
+  # - "张三"
+  # - "李四"
+  # - "某某公司"
+
+# 处理参数
+settings:
+  sample_fps: 2            # 每秒采样帧数，越高越精确但越慢
+  blur_mode: gaussian       # gaussian | pixelate | solid
+  blur_strength: 30         # 模糊强度(gaussian/pixelate)或颜色(solid模式下无效)
+  blur_color: "black"       # solid 模式下的覆盖颜色
+  blur_padding: 10          # 模糊区域在文字边界外扩展的像素数
+  ocr_lang: chi_sim+eng     # Tesseract 语言（中文简体 + 英文）
+  confidence_threshold: 40  # OCR 置信度阈值（0-100），低于此值的检测将被忽略
+  merge_gap_seconds: 0.5    # 合并间隔小于此值的相邻时间段
+  iou_threshold: 0.3        # IoU 阈值，判断相邻帧中是否为同一区域
