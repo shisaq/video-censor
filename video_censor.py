@@ -64,15 +64,15 @@ DEFAULT_CONFIG = {
     ],
     "keywords": [],
     "settings": {
-        "sample_fps": 2,
+        "output_fps": None,
+        "sample_fps": None,
         "blur_mode": "gaussian",
         "blur_strength": 30,
         "blur_color": "black",
         "blur_padding": 10,
         "ocr_lang": "chi_sim+eng",
         "confidence_threshold": 40,
-        "merge_gap_seconds": 0.5,
-        "iou_threshold": 0.3,
+        "iou_threshold": 0.5,
     },
 }
 
@@ -221,11 +221,16 @@ def iou(a: dict, b: dict) -> float:
 
 
 def merge_detections(
-    all_matches: list[TextBox], settings: dict
+    all_matches: list[TextBox], settings: dict, effective_sample_fps: float
 ) -> list[CensorRegion]:
-    """Merge detected text boxes across frames into CensorRegions."""
-    iou_thresh = settings.get("iou_threshold", 0.3)
-    gap_seconds = settings.get("merge_gap_seconds", 0.5)
+    """Merge detected text boxes across frames into CensorRegions.
+
+    Only merges spatially overlapping detections in strictly consecutive frames.
+    No time buffering — each region covers exactly the frames where it was detected.
+    """
+    iou_thresh = settings.get("iou_threshold", 0.5)
+    # Allow merging only within consecutive frames (1.5x frame interval as tolerance)
+    max_gap = 1.5 / effective_sample_fps if effective_sample_fps > 0 else 0.2
 
     # Sort by time
     all_matches.sort(key=lambda b: b.frame_time)
@@ -239,19 +244,11 @@ def merge_detections(
             region_rect = {"x": region.x, "y": region.y, "w": region.w, "h": region.h}
             if (
                 iou(box_rect, region_rect) >= iou_thresh
-                and box.frame_time - region.t_end <= gap_seconds
+                and box.frame_time - region.t_end <= max_gap
             ):
-                # Extend this region
+                # Extend this region's time span (no spatial expansion —
+                # keep the bounding box stable to avoid drift during scrolling)
                 region.t_end = box.frame_time
-                # Expand bounding box to encompass both
-                new_x = min(region.x, box.x)
-                new_y = min(region.y, box.y)
-                new_x2 = max(region.x + region.w, box.x + box.w)
-                new_y2 = max(region.y + region.h, box.y + box.h)
-                region.x = new_x
-                region.y = new_y
-                region.w = new_x2 - new_x
-                region.h = new_y2 - new_y
                 merged = True
                 break
 
@@ -263,12 +260,6 @@ def merge_detections(
                 matched_text=box.text,
                 pattern_name="",
             ))
-
-    # Extend each region by half a sampling interval at both ends
-    for region in regions:
-        half_interval = gap_seconds
-        region.t_start = max(0, region.t_start - half_interval)
-        region.t_end += half_interval
 
     return regions
 
@@ -386,6 +377,37 @@ def generate_preview(
 
 
 # ────────────────────────────────────────────────────────────
+# Video pre-processing (fps reduction)
+# ────────────────────────────────────────────────────────────
+
+def preprocess_video_fps(input_path: str, target_fps: float, original_fps: float) -> str | None:
+    """Pre-process video to lower fps using ffmpeg. Returns temp file path, or None if not needed."""
+    if target_fps >= original_fps:
+        return None
+
+    tmp = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False)
+    tmp_path = tmp.name
+    tmp.close()
+
+    print(f"\n⏬ 预处理: 将视频从 {original_fps:.1f}fps 降至 {target_fps}fps...")
+    cmd = [
+        "ffmpeg", "-y", "-i", input_path,
+        "-filter:v", f"fps=fps={target_fps}",
+        "-c:a", "copy",
+        tmp_path,
+    ]
+    try:
+        subprocess.run(cmd, check=True, capture_output=True)
+        print(f"   预处理完成: {tmp_path}")
+        return tmp_path
+    except subprocess.CalledProcessError as e:
+        print(f"⚠️  预处理失败: {e.stderr.decode() if e.stderr else e}")
+        if os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+        return None
+
+
+# ────────────────────────────────────────────────────────────
 # Main processing pipeline
 # ────────────────────────────────────────────────────────────
 
@@ -398,26 +420,60 @@ def process_video(
 ):
     """Main pipeline: sample frames → OCR → match → blur → output."""
     settings = config["settings"]
-    sample_fps = settings.get("sample_fps", 2)
+    output_fps = settings.get("output_fps")
+    sample_fps = settings.get("sample_fps")
 
-    # Open video
+    # Open video to get original properties
     cap = cv2.VideoCapture(input_path)
     if not cap.isOpened():
         print(f"❌ 无法打开视频: {input_path}")
         sys.exit(1)
 
-    video_fps = cap.get(cv2.CAP_PROP_FPS)
+    original_fps = cap.get(cv2.CAP_PROP_FPS)
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     video_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     video_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    duration = total_frames / video_fps if video_fps > 0 else 0
+    duration = total_frames / original_fps if original_fps > 0 else 0
+    cap.release()
 
-    print(f"📹 视频信息: {video_w}x{video_h}, {video_fps:.1f}fps, "
+    print(f"📹 视频信息: {video_w}x{video_h}, {original_fps:.1f}fps, "
           f"{total_frames}帧, 时长 {duration:.1f}秒")
-    print(f"⚙️  采样率: {sample_fps} fps → 预计分析 {int(duration * sample_fps)} 帧")
 
-    # Calculate frame interval
-    frame_interval = max(1, int(video_fps / sample_fps))
+    # Determine effective output_fps and sample_fps
+    effective_output_fps = output_fps if output_fps and output_fps < original_fps else original_fps
+    # sample_fps defaults to output_fps when not explicitly set
+    if sample_fps:
+        effective_sample_fps = sample_fps
+    else:
+        effective_sample_fps = effective_output_fps
+
+    # Pre-process: reduce fps if output_fps < original_fps
+    preprocessed_path = None
+    analysis_input = input_path
+    if effective_output_fps < original_fps:
+        preprocessed_path = preprocess_video_fps(input_path, effective_output_fps, original_fps)
+        if preprocessed_path:
+            analysis_input = preprocessed_path
+
+    # Open the (possibly pre-processed) video for OCR analysis
+    cap = cv2.VideoCapture(analysis_input)
+    if not cap.isOpened():
+        print(f"❌ 无法打开视频: {analysis_input}")
+        sys.exit(1)
+
+    video_fps = cap.get(cv2.CAP_PROP_FPS)
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+
+    # Calculate frame interval for sampling
+    frame_interval = max(1, int(video_fps / effective_sample_fps))
+    analyze_every_frame = frame_interval == 1
+
+    if analyze_every_frame:
+        print(f"⚙️  输出帧率: {effective_output_fps}fps | 采样: 每帧都分析 → 预计 {total_frames} 帧")
+    else:
+        print(f"⚙️  输出帧率: {effective_output_fps}fps | 采样率: {effective_sample_fps}fps → "
+              f"预计分析 {int(duration * effective_sample_fps)} 帧")
+
     all_matches: list[TextBox] = []
     frames_analyzed = 0
 
@@ -452,10 +508,11 @@ def process_video(
 
     if not all_matches:
         print("✅ 未发现需要脱敏的信息。")
+        _cleanup_temp(preprocessed_path)
         return
 
     # Merge detections into regions
-    regions = merge_detections(all_matches, settings)
+    regions = merge_detections(all_matches, settings, effective_sample_fps)
     print(f"📦 合并为 {len(regions)} 个脱敏区域:")
     for i, r in enumerate(regions):
         print(f"   [{i+1}] ({r.x},{r.y}) {r.w}x{r.h} | "
@@ -464,13 +521,18 @@ def process_video(
 
     if dry_run:
         print("\n🏁 Dry-run 模式，不生成输出文件。")
+        _cleanup_temp(preprocessed_path)
         return
+
+    # Use pre-processed video as ffmpeg input (already at target fps)
+    ffmpeg_input = analysis_input
 
     if preview:
         preview_path = output_path.replace(".mp4", "_preview.mp4")
         if preview_path == output_path:
             preview_path = output_path.rsplit(".", 1)[0] + "_preview.mp4"
-        generate_preview(input_path, preview_path, regions, settings, video_w, video_h)
+        generate_preview(ffmpeg_input, preview_path, regions, settings, video_w, video_h)
+        _cleanup_temp(preprocessed_path)
         return
 
     # Build ffmpeg command
@@ -481,7 +543,7 @@ def process_video(
             regions, settings, video_w, video_h
         )
         cmd = [
-            "ffmpeg", "-y", "-i", input_path,
+            "ffmpeg", "-y", "-i", ffmpeg_input,
             "-vf", vf_filter,
             "-c:a", "copy",
             output_path,
@@ -491,7 +553,7 @@ def process_video(
             regions, settings, video_w, video_h
         )
         cmd = [
-            "ffmpeg", "-y", "-i", input_path,
+            "ffmpeg", "-y", "-i", ffmpeg_input,
             "-filter_complex", filter_complex,
             "-map", last_label,
             "-map", "0:a?",
@@ -512,7 +574,16 @@ def process_video(
     except subprocess.CalledProcessError as e:
         print(f"\n❌ ffmpeg 处理失败 (exit code {e.returncode})")
         print("   提示: 可以尝试使用 --preview 模式先检查检测区域是否正确")
+        _cleanup_temp(preprocessed_path)
         sys.exit(1)
+
+    _cleanup_temp(preprocessed_path)
+
+
+def _cleanup_temp(path: str | None):
+    """Remove temporary file if it exists."""
+    if path and os.path.exists(path):
+        os.unlink(path)
 
 
 # ────────────────────────────────────────────────────────────
@@ -549,11 +620,12 @@ def main():
         print(f"❌ 输入文件不存在: {args.input}")
         sys.exit(1)
 
-    # Determine output path
+    # Determine output path (default: same directory as input file)
     if args.output:
         output_path = args.output
     else:
-        base, ext = os.path.splitext(args.input)
+        input_abs = os.path.abspath(args.input)
+        base, ext = os.path.splitext(input_abs)
         output_path = f"{base}_censored{ext}"
 
     # Load config
@@ -568,6 +640,8 @@ def main():
     print(f"📋 配置: {args.config}")
     print(f"🔍 正则模式: {len(config.get('patterns', []))} 个")
     print(f"🔑 关键词: {len(config.get('keywords', []))} 个")
+    out_fps = config['settings'].get('output_fps')
+    print(f"🎞️  输出帧率: {out_fps if out_fps else '保持原始'}")
     print(f"🌫️  模糊模式: {config['settings'].get('blur_mode', 'gaussian')}")
     print()
 

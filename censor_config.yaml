@@ -25,12 +25,14 @@ keywords:
 
 # 处理参数
 settings:
-  sample_fps: 2            # 每秒采样帧数，越高越精确但越慢
+  output_fps: 10            # 输出视频帧率，低于原始帧率时会先降帧再处理，大幅提速
+                            # 设为 null 或删除此行则保持原始帧率
+  sample_fps: null          # 每秒采样帧数，null 表示跟随 output_fps（推荐），确保每帧都被分析
+                            # 手动设置数值会覆盖此行为
   blur_mode: gaussian       # gaussian | pixelate | solid
   blur_strength: 30         # 模糊强度(gaussian/pixelate)或颜色(solid模式下无效)
   blur_color: "black"       # solid 模式下的覆盖颜色
   blur_padding: 10          # 模糊区域在文字边界外扩展的像素数
   ocr_lang: chi_sim+eng     # Tesseract 语言（中文简体 + 英文）
   confidence_threshold: 40  # OCR 置信度阈值（0-100），低于此值的检测将被忽略
-  merge_gap_seconds: 0.5    # 合并间隔小于此值的相邻时间段
-  iou_threshold: 0.3        # IoU 阈值，判断相邻帧中是否为同一区域
+  iou_threshold: 0.5        # IoU 阈值，判断相邻帧中是否为同一区域（仅合并位置高度重叠的连续帧）
