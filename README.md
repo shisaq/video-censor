@@ -54,19 +54,32 @@ keywords:
 
 # 处理参数
 settings:
-  sample_fps: 2          # 每秒采样帧数
+  output_fps: 10          # 输出帧率，低于原始时先降帧再处理，大幅提速
+  sample_fps: null        # null = 跟随 output_fps，每帧都分析（推荐）
   blur_mode: gaussian     # gaussian | pixelate | solid
   blur_strength: 30       # 模糊强度
-  blur_padding: 10        # 扩展像素
+  blur_padding: 10        # 模糊区域外扩像素
   ocr_lang: chi_sim+eng   # OCR 语言
+  confidence_threshold: 40  # OCR 置信度阈值（0-100）
+  iou_threshold: 0.5      # 相邻帧同一区域判定阈值
 ```
+
+### 关键参数说明
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `output_fps` | `10` | 输出视频帧率。设为低于原始帧率的值可大幅提速（如 30fps→10fps，工作量减少 2/3）。设为 `null` 保持原始帧率 |
+| `sample_fps` | `null` | OCR 采样帧率。`null` 表示跟随 `output_fps`，确保每帧都被分析，不遗漏敏感信息 |
+| `blur_mode` | `gaussian` | `gaussian`（高斯模糊）、`pixelate`（像素化）、`solid`（纯色覆盖） |
+| `confidence_threshold` | `40` | OCR 置信度阈值，低于此值的识别结果会被忽略，调高可减少误检 |
+| `iou_threshold` | `0.5` | 相邻帧区域重叠度阈值，仅合并位置高度重合的连续帧，避免滚动时误合并 |
 
 ## 工作流程
 
-1. **帧采样** — 按配置的 FPS 从视频中抽取关键帧
-2. **OCR 识别** — 使用 Tesseract 识别每帧中的文字及位置
+1. **降帧预处理** — 若 `output_fps` 低于原始帧率，先用 ffmpeg 降帧，减少后续工作量
+2. **逐帧 OCR** — 使用 Tesseract 识别每帧中的文字及位置
 3. **敏感匹配** — 通过正则表达式和关键词过滤敏感信息
-4. **区域合并** — 将相邻帧的同一区域合并为时间段
+4. **区域合并** — 将连续帧中位置相同的区域合并（无时间缓冲，精确到帧）
 5. **视频处理** — 调用 ffmpeg 对目标区域进行模糊处理
 
 ## 依赖
