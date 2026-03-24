@@ -7,3 +7,4 @@ __pycache__/
 *.mov
 *.avi
 .claude/
+implementation_plan.md
