@@ -4,13 +4,55 @@
 
 ## 快速开始
 
+### macOS
+
 ```bash
-# 1. 一键运行（自动安装依赖）
+# 安装依赖
+brew install ffmpeg tesseract tesseract-lang
+
+# 一键运行（自动创建虚拟环境并安装 Python 包）
 chmod +x run.sh
 ./run.sh your_video.mp4
+```
 
-# 2. 或手动运行
-source .venv/bin/activate
+### Windows
+
+```cmd
+REM 安装依赖（任选一种方式）
+winget install Gyan.FFmpeg
+winget install UB-Mannheim.TesseractOCR
+
+REM 一键运行
+run.bat your_video.mp4
+```
+
+### Linux
+
+```bash
+# Debian/Ubuntu
+sudo apt-get install ffmpeg tesseract-ocr tesseract-ocr-chi-sim
+
+# Fedora
+sudo dnf install ffmpeg tesseract tesseract-langpack-chi_sim
+
+# Arch
+sudo pacman -S ffmpeg tesseract tesseract-data-chi_sim
+
+# 一键运行
+chmod +x run.sh
+./run.sh your_video.mp4
+```
+
+### 手动运行
+
+```bash
+# 创建虚拟环境并安装 Python 包
+python3 -m venv .venv
+source .venv/bin/activate        # macOS/Linux
+# .venv\Scripts\activate.bat     # Windows CMD
+# .venv\Scripts\Activate.ps1     # Windows PowerShell
+pip install -r requirements.txt
+
 python video_censor.py your_video.mp4
 ```
 
@@ -85,6 +127,8 @@ settings:
 ## 依赖
 
 - Python 3.10+
-- ffmpeg (`brew install ffmpeg`)
-- Tesseract (`brew install tesseract tesseract-lang`)
+- ffmpeg
+- Tesseract OCR（含中文语言包 `chi_sim`）
 - Python 包: opencv-python, pytesseract, pyyaml
+
+各平台安装方式见上方「快速开始」。缺少依赖时，工具会自动检测并给出对应平台的安装提示。

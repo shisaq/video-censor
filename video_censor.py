@@ -13,11 +13,124 @@ Video Censor — 录屏视频敏感信息自动脱敏工具
 import argparse
 import math
 import os
+import platform
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
 from dataclasses import dataclass, field
+
+
+# ────────────────────────────────────────────────────────────
+# Cross-platform dependency checks
+# ────────────────────────────────────────────────────────────
+
+def _install_hints() -> dict[str, str]:
+    """Return platform-specific install hints for external dependencies."""
+    system = platform.system()
+    if system == "Darwin":
+        return {
+            "ffmpeg": "brew install ffmpeg",
+            "tesseract": "brew install tesseract",
+            "chi_sim": "brew install tesseract-lang",
+        }
+    elif system == "Linux":
+        if shutil.which("apt-get"):
+            return {
+                "ffmpeg": "sudo apt-get install ffmpeg",
+                "tesseract": "sudo apt-get install tesseract-ocr",
+                "chi_sim": "sudo apt-get install tesseract-ocr-chi-sim",
+            }
+        elif shutil.which("dnf"):
+            return {
+                "ffmpeg": "sudo dnf install ffmpeg",
+                "tesseract": "sudo dnf install tesseract",
+                "chi_sim": "sudo dnf install tesseract-langpack-chi_sim",
+            }
+        elif shutil.which("pacman"):
+            return {
+                "ffmpeg": "sudo pacman -S ffmpeg",
+                "tesseract": "sudo pacman -S tesseract",
+                "chi_sim": "sudo pacman -S tesseract-data-chi_sim",
+            }
+        return {
+            "ffmpeg": "请通过系统包管理器安装 ffmpeg",
+            "tesseract": "请通过系统包管理器安装 tesseract",
+            "chi_sim": "请通过系统包管理器安装 tesseract 中文语言包",
+        }
+    else:  # Windows
+        return {
+            "ffmpeg": "winget install Gyan.FFmpeg  (或 choco install ffmpeg)",
+            "tesseract": "winget install UB-Mannheim.TesseractOCR  (或 choco install tesseract)",
+            "chi_sim": "从 https://github.com/tesseract-ocr/tessdata 下载 chi_sim.traineddata 放入 tessdata 目录",
+        }
+
+
+def _check_tesseract_on_windows():
+    """On Windows, auto-detect Tesseract path if not on PATH."""
+    if platform.system() != "Windows":
+        return
+    if shutil.which("tesseract"):
+        return
+    # Common install locations on Windows
+    common_paths = [
+        r"C:\Program Files\Tesseract-OCR\tesseract.exe",
+        r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
+        os.path.expandvars(r"%LOCALAPPDATA%\Programs\Tesseract-OCR\tesseract.exe"),
+    ]
+    for p in common_paths:
+        if os.path.isfile(p):
+            import pytesseract as _pt
+            _pt.pytesseract.tesseract_cmd = p
+            return
+    # Not found anywhere — will be caught by check_dependencies
+
+
+def check_dependencies():
+    """Check that ffmpeg and tesseract are available, exit with helpful messages if not."""
+    hints = _install_hints()
+    missing = False
+
+    if not shutil.which("ffmpeg"):
+        print(f"❌ 未找到 ffmpeg\n   安装方法: {hints['ffmpeg']}")
+        missing = True
+
+    _check_tesseract_on_windows()
+
+    if not shutil.which("tesseract"):
+        # On Windows, pytesseract may still work if tesseract_cmd was set above
+        if platform.system() == "Windows":
+            try:
+                import pytesseract as _pt
+                if _pt.pytesseract.tesseract_cmd and os.path.isfile(_pt.pytesseract.tesseract_cmd):
+                    pass  # tesseract_cmd was set, skip PATH check
+                else:
+                    raise FileNotFoundError
+            except (AttributeError, FileNotFoundError):
+                print(f"❌ 未找到 tesseract\n   安装方法: {hints['tesseract']}")
+                missing = True
+        else:
+            print(f"❌ 未找到 tesseract\n   安装方法: {hints['tesseract']}")
+            missing = True
+
+    if missing:
+        sys.exit(1)
+
+    # Check chi_sim language pack (non-fatal)
+    try:
+        result = subprocess.run(
+            ["tesseract", "--list-langs"],
+            capture_output=True, text=True, timeout=10,
+        )
+        if "chi_sim" not in result.stdout and "chi_sim" not in result.stderr:
+            print(f"⚠️  未找到中文语言包 chi_sim\n   安装方法: {hints['chi_sim']}")
+    except (subprocess.SubprocessError, FileNotFoundError):
+        pass
+
+
+# Run checks before importing heavy dependencies
+check_dependencies()
 
 import cv2
 import pytesseract
